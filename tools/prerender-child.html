@@ -1,0 +1,194 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Prerender Child</title>
+<style>
+  body { font-family: sans-serif; padding: 2em; max-width: 900px; margin: 0 auto; }
+  #status { font-size: 2em; margin-bottom: 0.2em; }
+  .ok  { color: #0a0; }
+  .bad { color: #a00; }
+  .pre { color: #888; }
+  #summary { font-size: 1.1em; line-height: 1.5; background: #fff8dc; border-left: 4px solid #e6c200; padding: 1em; margin: 1em 0; }
+  #summary.ok  { background: #e8f7e8; border-left-color: #0a0; }
+  #summary.bad { background: #fbeaea; border-left-color: #a00; }
+  table { border-collapse: collapse; width: 100%; margin-top: 1em; }
+  th, td { text-align: left; padding: 0.4em 0.6em; border-bottom: 1px solid #ddd; vertical-align: top; }
+  th { background: #f4f4f4; width: 40%; font-weight: 600; }
+  td.val { font-family: Consolas, monospace; }
+  td.yes { color: #0a0; font-weight: 600; }
+  td.no  { color: #a00; font-weight: 600; }
+  .muted { color: #888; }
+</style>
+</head>
+<body>
+<h1 id="status">checking...</h1>
+<div id="summary">Running...</div>
+
+<h2>Prerender details</h2>
+<table id="details">
+  <tbody></tbody>
+</table>
+
+<script>
+(function () {
+  var statusEl = document.getElementById('status');
+  var summaryEl = document.getElementById('summary');
+  var tableBody = document.querySelector('#details tbody');
+
+  // ---- window._pageTimings : single source of truth for the agent ----
+  // The WPT agent reads window._pageTimings at load/stop time. We publish
+  // prerender info here so it shows up in the uploaded result.
+  window._pageTimings = window._pageTimings || {};
+  var pt = window._pageTimings;
+
+  // Snapshot timing state as early as possible. If this document is being
+  // prerendered, these represent timing *during* prerender.
+  var parseTimeMs = (performance && performance.now) ? performance.now() : null;
+  var wasPrerenderingAtParse = !!document.prerendering;
+
+  pt.prerender_supported = ('prerendering' in document);
+  pt.prerender_attempted = wasPrerenderingAtParse;
+  pt.prerender_activated = false;
+  pt.prerender_parse_time_ms = parseTimeMs;
+  pt.prerender_parse_state = wasPrerenderingAtParse ? 'prerendering' : 'active';
+  pt.prerender_activation_start_ms = null;
+  pt.prerender_time_to_activation_ms = null;
+  pt.prerender_dom_content_loaded_ms = null;
+  pt.prerender_load_event_ms = null;
+  pt.prerender_nav_type = null;
+  pt.prerender_visibility_state_at_parse = document.visibilityState;
+  pt.prerender_referrer = document.referrer || '';
+  pt.prerender_url = location.href;
+
+  function captureNavTiming() {
+    var nav = null;
+    try { nav = performance.getEntriesByType('navigation')[0]; } catch (e) {}
+    if (!nav) { return; }
+    pt.prerender_activation_start_ms = nav.activationStart || 0;
+    pt.prerender_dom_content_loaded_ms = nav.domContentLoadedEventEnd || null;
+    pt.prerender_load_event_ms = nav.loadEventEnd || null;
+    pt.prerender_nav_type = nav.type || null;
+  }
+
+  function fmt(v) {
+    if (v === null || v === undefined) return '<span class="muted">n/a</span>';
+    if (typeof v === 'boolean') return v
+      ? '<span class="yes">true</span>'
+      : '<span class="no">false</span>';
+    if (typeof v === 'number') return v.toFixed(2) + (v < 10000 ? ' ms' : '');
+    return String(v);
+  }
+
+  // Human-friendly labels and the order we want rows shown.
+  var rows = [
+    ['prerender_supported',              'Browser supports prerender API'],
+    ['prerender_attempted',              'Document parsed under prerender'],
+    ['prerender_activated',              'Activation (prerenderingchange) fired'],
+    ['prerender_parse_state',            'Current state'],
+    ['prerender_nav_type',               'Navigation type'],
+    ['prerender_activation_start_ms',    'activationStart'],
+    ['prerender_time_to_activation_ms',  'Time from parse to activation'],
+    ['prerender_dom_content_loaded_ms',  'DOMContentLoaded'],
+    ['prerender_load_event_ms',          'load event'],
+    ['prerender_parse_time_ms',          'performance.now() at parse'],
+    ['prerender_visibility_state_at_parse', 'visibilityState at parse'],
+    ['prerender_referrer',               'Referrer'],
+    ['prerender_url',                    'URL'],
+  ];
+
+  function renderTable() {
+    // Rebuild the tbody from the current pt values.
+    tableBody.innerHTML = '';
+    rows.forEach(function (r) {
+      var tr = document.createElement('tr');
+      var th = document.createElement('th');
+      th.textContent = r[1];
+      var td = document.createElement('td');
+      td.className = 'val';
+      td.innerHTML = fmt(pt[r[0]]);
+      tr.appendChild(th);
+      tr.appendChild(td);
+      tableBody.appendChild(tr);
+    });
+  }
+
+  function renderSummary() {
+    // Plain-English explanation of what happened.
+    var msg, cls;
+    if (!pt.prerender_supported) {
+      cls = 'bad';
+      msg = 'This browser does not expose document.prerendering, so it cannot ' +
+            'prerender pages via speculation rules.';
+    } else if (pt.prerender_activated) {
+      cls = 'ok';
+      msg = 'Success: the browser prerendered this page in the background ' +
+            'after the source page declared a speculation rule, then ' +
+            'activated it when the link was clicked. The user saw an ' +
+            'instant navigation. activationStart = ' +
+            (pt.prerender_activation_start_ms || 0).toFixed(2) + ' ms ' +
+            'from the original prerender start.';
+    } else if (pt.prerender_attempted) {
+      cls = 'pre';
+      msg = 'Prerendering is in progress in the background. This page is ' +
+            'hidden. When the user clicks the link on the source page, ' +
+            'activation will fire and this summary will update.';
+    } else {
+      cls = 'bad';
+      // Figure out why no prerender happened.
+      var reason;
+      if (document.referrer) {
+        reason = 'This page was loaded as a normal navigation (referrer = ' +
+                 document.referrer + '). The source page\'s speculation rule ' +
+                 'did not prerender the child before the click. ' +
+                 'Common causes: "Preload pages" is disabled in browser ' +
+                 'settings, the rule was rejected (check the Console), or ' +
+                 'the click happened before the prerender reached Ready ' +
+                 '(check Application > Speculative loads).';
+      } else {
+        reason = 'This page was loaded directly (no referrer). Navigate to ' +
+                 'the source page first and click the link so the speculation ' +
+                 'rule has a chance to prerender this URL.';
+      }
+      msg = 'No prerender: ' + reason;
+    }
+    summaryEl.className = cls;
+    summaryEl.textContent = msg;
+  }
+
+  function render() {
+    renderSummary();
+    renderTable();
+  }
+
+  if (wasPrerenderingAtParse) {
+    statusEl.textContent = 'PRERENDERING (in background)';
+    statusEl.className = 'pre';
+
+    document.addEventListener('prerenderingchange', function () {
+      var changeTimeMs = (performance && performance.now) ? performance.now() : null;
+      pt.prerender_activated = true;
+      pt.prerender_parse_state = 'activated';
+      pt.prerender_time_to_activation_ms =
+        (parseTimeMs != null && changeTimeMs != null) ? (changeTimeMs - parseTimeMs) : null;
+      statusEl.textContent = 'ACTIVATED from prerender [OK]';
+      statusEl.className = 'ok';
+      captureNavTiming();
+      render();
+    });
+  } else {
+    statusEl.textContent = 'NOT prerendered (normal nav)';
+    statusEl.className = 'bad';
+  }
+
+  window.addEventListener('load', function () {
+    captureNavTiming();
+    render();
+  });
+
+  // Initial render.
+  render();
+})();
+</script>
+</body>
+</html>

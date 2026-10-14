@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Request Generator</title></head>
+<body>
+<p>Makes sequential GET requests with a delay between each one.</p>
+<ul>
+  <li><code>?r=100&amp;d=100</code> - 100 requests, 100 ms apart (default r=10, d=100).</li>
+  <li><code>?r=0&amp;d=5000</code> - a request every 5 s, forever (the network never goes idle).</li>
+  <li><code>?n=5</code> - shorthand for <code>r=0&amp;d=5000</code>.</li>
+  <li><code>?u=https://example.com/x</code> - request URL (default same-origin blank.html). A random <code>t</code> param is added to avoid caching.</li>
+</ul>
+<p>Request #<span id="i">0</span> of <span id="r"></span>, <span id="d"></span> ms apart, to <code id="u"></code></p>
+<script>
+var q = new URLSearchParams(location.search);
+var n = parseFloat(q.get('n'));
+var r = q.has('r') ? parseInt(q.get('r'), 10) : (n > 0 ? 0 : 10);
+var d = q.has('d') ? parseInt(q.get('d'), 10) : (n > 0 ? n * 1000 : 100);
+var u = q.get('u') || '../blank.html';
+if (!(r >= 0)) r = 10;
+if (!(d >= 0)) d = 100;
+document.getElementById('r').textContent = r === 0 ? 'unlimited' : r;
+document.getElementById('d').textContent = d;
+document.getElementById('u').textContent = u;
+
+(async function () {
+  var sleep = function (ms) { return new Promise(function (res) { setTimeout(res, ms); }); };
+  for (var i = 1; r === 0 || i <= r; i++) {
+    await sleep(d);
+    document.getElementById('i').textContent = i;
+    var url = new URL(u, location.href);
+    url.searchParams.set('t', Math.random());
+    // no-cors so cross-origin targets are still requested; the response is opaque and ignored.
+    try { await fetch(url, { mode: 'no-cors', cache: 'no-store' }); } catch (e) {}
+  }
+})();
+</script>
+</body>
+</html>

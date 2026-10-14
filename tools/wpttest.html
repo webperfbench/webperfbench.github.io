@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>WPT Waterfall Indicator Test Page</title>
+
+  <!-- TRIGGER: Render Blocking Resource
+       A sync <link rel="stylesheet"> in <head> is render-blocking by definition.
+       Chrome marks this via CDP's renderBlocking field regardless of whether
+       the response body is actually CSS, so we can reuse the ping target. -->
+  <link rel="stylesheet" href="./wpttest-ping.json?label=render-blocking">
+
+  <!-- TRIGGER: 4xx+ response (favicon variant) -->
+  <link rel="icon" href="./does-not-exist-favicon.ico?label=404-favicon">
+
+  <style>
+    body { font-family: -apple-system, "Segoe UI", sans-serif; max-width: 880px; margin: 2em auto; padding: 0 1em; line-height: 1.5; color: #222; }
+    code { background: #f0f0f0; padding: 1px 5px; border-radius: 3px; font-size: 13px; }
+    h2 { border-bottom: 1px solid #ddd; padding-bottom: 4px; margin-top: 1.6em; }
+    table { border-collapse: collapse; margin: 1em 0; width: 100%; }
+    th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #eee; font-size: 13px; vertical-align: top; }
+    th { background: #f4f4f4; }
+    ul#status { font-family: Consolas, monospace; font-size: 12px; background: #fafafa; border: 1px solid #eee; padding: 8px 12px 8px 28px; max-height: 240px; overflow: auto; }
+    .ok      { color: #1a7f37; }
+    .pending { color: #888; }
+    .fail    { color: #b00; }
+    iframe   { width: 320px; height: 60px; border: 1px solid #ccc; }
+  </style>
+</head>
+<body>
+
+<h1>WPT Waterfall Indicator Test Page</h1>
+
+<p>
+  This page exercises every indicator, icon, and tab in the WPT waterfall view in a single test run. Run it through any WPT instance and verify each row renders correctly side-by-side. Every request is labelled via a <code>?label=</code> query param so you can identify it in the waterfall.
+</p>
+
+<h2>What each row represents</h2>
+
+<table>
+  <thead><tr><th>Row label (URL contains)</th><th>Indicator</th><th>How it's triggered</th></tr></thead>
+  <tbody>
+    <tr><td><code>render-blocking</code></td>          <td>Render Blocking Resource</td>          <td>Sync <code>&lt;link rel=stylesheet&gt;</code> in <code>&lt;head&gt;</code></td></tr>
+    <tr><td><code>404-favicon</code>, <code>404-fetch</code>, <code>404-img</code></td><td>4xx+ response</td><td>Request a non-existent path</td></tr>
+    <tr><td><code>3xx-fetch</code></td>                <td>3xx response</td>                     <td>Cross-origin URL that 301/302s (e.g. <code>google.com</code> → <code>www.google.com</code>)</td></tr>
+    <tr><td><code>cross-doc-img</code>, <code>cross-doc-fetch</code></td><td>Doesn't Belong to Main Doc</td><td>Subresource loaded from inside an iframe (different <code>documentURL</code>)</td></tr>
+    <tr><td><code>insecure-img</code></td>             <td>Insecure Request</td>                 <td>Plain <code>http://</code> image. <strong>Note:</strong> modern browsers block this on HTTPS pages — the request usually won't even be made. Best verified on a separately-recorded HTTP test.</td></tr>
+    <tr><td><code>web-worker-*</code></td>             <td>Worker dot + Worker tab</td>          <td>Dedicated <code>Worker</code> calling <code>importScripts()</code> + <code>fetch()</code></td></tr>
+    <tr><td><code>shared-worker-*</code></td>          <td>Worker dot + Worker tab</td>          <td><code>SharedWorker</code> calling <code>importScripts()</code> + <code>fetch()</code></td></tr>
+    <tr><td><code>sw-install</code></td>               <td>SW dot + Worker tab</td>              <td><code>fetch()</code> from inside the SW's <code>install</code> handler</td></tr>
+    <tr><td><code>sw-message</code></td>               <td>SW dot + Worker tab</td>              <td><code>fetch()</code> from the SW after <code>postMessage</code> from the page</td></tr>
+    <tr><td><code>sw-intercept-respond</code></td>     <td>Worker tab w/ SW timings</td>         <td>Main-thread fetch the SW intercepts and answers from cache</td></tr>
+    <tr><td><code>sw-intercept-passthrough</code></td> <td>Worker tab w/ SW timings</td>         <td>Main-thread fetch the SW intercepts and forwards to network</td></tr>
+  </tbody>
+</table>
+
+<h2>Live runtime status</h2>
+<ul id="status"></ul>
+
+<div id="iframeHost"></div>
+
+<script>
+(function () {
+  const status = document.getElementById('status');
+  function log(msg, cls) {
+    const li = document.createElement('li');
+    li.className = cls || 'pending';
+    li.textContent = '[' + new Date().toISOString().substr(11, 12) + '] ' + msg;
+    status.appendChild(li);
+    return li;
+  }
+
+  // ---------------- 4xx (a regular fetch on top of the favicon) ----------------
+  log('Issuing 404 fetch...');
+  fetch('./does-not-exist.json?label=404-fetch')
+    .then(r  => log('  404 fetch returned ' + r.status, r.ok ? 'fail' : 'ok'))
+    .catch(e => log('  404 fetch threw: ' + e, 'fail'));
+
+  // Also load a 404 image to ensure the indicator fires for image-type rows.
+  const img404 = new Image();
+  img404.onload  = () => log('  404 img unexpectedly loaded', 'fail');
+  img404.onerror = () => log('  404 img errored (expected)', 'ok');
+  img404.src = './does-not-exist.png?label=404-img';
+
+  // ---------------- 3xx ----------------
+  // Static hosting doesn't support redirects, so we use a stable
+  // public redirector. If google.com stops 301-ing, swap for another.
+  log('Issuing 3xx redirect fetch...');
+  fetch('https://google.com/?label=3xx-fetch', { mode: 'no-cors' })
+    .then(()  => log('  3xx done', 'ok'))
+    .catch(e  => log('  3xx failed: ' + e, 'fail'));
+
+  // ---------------- Doesn't Belong to Main Doc (iframe) ----------------
+  log('Spawning iframe (cross-doc requests)...');
+  const iframe = document.createElement('iframe');
+  iframe.srcdoc = `
+    <html><body style="font:13px sans-serif;margin:6px;">
+      iframe content
+      <img src="./wpttest-ping.json?label=cross-doc-img" style="display:none">
+      <script>
+        fetch('./wpttest-ping.json?label=cross-doc-fetch');
+      <\/script>
+    </body></html>`;
+  document.getElementById('iframeHost').appendChild(iframe);
+
+  // ---------------- Insecure request ----------------
+  // Almost certainly blocked when this page is served over HTTPS. Included
+  // so you can verify the indicator visually on an HTTP test elsewhere.
+  log('Attempting http:// subresource (likely blocked on HTTPS)...');
+  const insecure = new Image();
+  insecure.onload  = () => log('  insecure-img loaded (unusual on HTTPS)', 'ok');
+  insecure.onerror = () => log('  insecure-img blocked/failed (expected on HTTPS)', 'ok');
+  insecure.src = 'http://example.com/favicon.ico?label=insecure-img';
+
+  // ---------------- Web Worker (dedicated) ----------------
+  // Workers created from blob: URLs have a blob: base URL, so relative paths
+  // don't resolve back to the page origin. We inline an absolute base.
+  log('Spawning Web Worker...');
+  try {
+    const base = new URL('./', location.href).href;
+    const workerSrc = `
+      const BASE = ${JSON.stringify(base)};
+      importScripts(BASE + 'wpttest-import.js?label=web-worker-importScripts');
+      fetch(BASE + 'wpttest-ping.json?label=web-worker-fetch')
+        .then(r => r.text())
+        .then(() => postMessage('done'));
+    `;
+    const w = new Worker(URL.createObjectURL(new Blob([workerSrc], { type: 'application/javascript' })));
+    w.onmessage = () => log('  web-worker done', 'ok');
+    w.onerror   = (e) => log('  web-worker error: ' + e.message, 'fail');
+  } catch (e) {
+    log('  web-worker spawn failed: ' + e, 'fail');
+  }
+
+  // ---------------- Shared Worker ----------------
+  log('Spawning Shared Worker...');
+  try {
+    if (typeof SharedWorker === 'undefined') throw new Error('SharedWorker not supported in this browser');
+    const sharedBase = new URL('./', location.href).href;
+    const sharedSrc = `
+      const BASE = ${JSON.stringify(sharedBase)};
+      self.onconnect = function(e) {
+        const port = e.ports[0];
+        port.start();
+        try { importScripts(BASE + 'wpttest-import.js?label=shared-worker-importScripts'); } catch (err) {}
+        fetch(BASE + 'wpttest-ping.json?label=shared-worker-fetch')
+          .then(() => port.postMessage('done'));
+      };
+    `;
+    const s = new SharedWorker(URL.createObjectURL(new Blob([sharedSrc], { type: 'application/javascript' })));
+    s.port.onmessage = (e) => { if (e.data === 'done') log('  shared-worker done', 'ok'); };
+    s.port.start();
+  } catch (e) {
+    log('  shared-worker not available: ' + e.message, 'fail');
+  }
+
+  // ---------------- Service Worker (install fetch + message fetch + intercepts) ----------------
+  if ('serviceWorker' in navigator) {
+    log('Registering Service Worker...');
+    navigator.serviceWorker.register('./wpttest-sw.js').then(reg => {
+      log('  SW registered, scope: ' + reg.scope, 'ok');
+
+      // Once the SW is controlling the page, fire the intercept tests.
+      const fireWhenReady = () => {
+        if (!navigator.serviceWorker.controller) return;
+        log('  SW now controlling; issuing intercept fetches...');
+        fetch('./wpttest-ping.json?label=sw-intercept-respond&intercepted=1')
+          .then(r => r.text())
+          .then(()  => log('  sw-intercept-respond done', 'ok'));
+        fetch('./wpttest-ping.json?label=sw-intercept-passthrough&intercepted=passthrough')
+          .then(()  => log('  sw-intercept-passthrough done', 'ok'));
+        // Ask the SW to make its own fetch.
+        navigator.serviceWorker.controller.postMessage({ kind: 'fetch-from-sw' });
+        log('  asked SW to fetch (label=sw-message)');
+      };
+
+      if (navigator.serviceWorker.controller) {
+        fireWhenReady();
+      } else {
+        navigator.serviceWorker.addEventListener('controllerchange', fireWhenReady, { once: true });
+      }
+    }, err => log('  SW registration failed: ' + err, 'fail'));
+  } else {
+    log('Service Worker API not available in this browser', 'fail');
+  }
+})();
+</script>
+
+</body>
+</html>

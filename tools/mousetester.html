@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Mouse / Input Tester</title>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: monospace; background: #1a1a1a; color: #eee; margin: 0; padding: 14px; }
+    .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 10px; }
+    #uaInfo  { font-size: 10px; color: #555; background: #2a2a2a; padding: 6px 12px;
+               border-radius: 6px; border: 1px solid #3a3a3a; white-space: nowrap;
+               overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+    #sysInfo { font-size: 11px; color: #666; background: #2a2a2a; padding: 6px 12px;
+               border-radius: 6px; border: 1px solid #3a3a3a; white-space: nowrap; }
+    #globalCoords { font-size: 12px; color: #888; background: #2a2a2a; padding: 6px 12px;
+                    border-radius: 6px; border: 1px solid #3a3a3a; white-space: nowrap; }
+    .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+    .section { padding: 14px; border: 1px solid #333; border-radius: 8px; background: #222; }
+    .section-title { font-size: 11px; color: #555; text-transform: uppercase; letter-spacing: 1px; margin: 0 0 12px 0; }
+    .help { font-size: 11px; color: #555; margin-top: 10px; line-height: 1.7; }
+    .help .label { color: #777; }
+    .result { margin-top: 8px; padding: 7px 12px; background: #1a1a1a; border-radius: 4px;
+              min-height: 28px; font-size: 12px; color: #666; border: 1px solid #2a2a2a; }
+    .btn-row { display: flex; gap: 10px; flex-wrap: wrap; }
+    .btn { padding: 14px 28px; border-radius: 6px; cursor: pointer; font-size: 14px;
+           font-family: monospace; border: 2px solid; }
+    #clickBtn { background: #1e3a5a; color: #cce; border-color: #2a5a8a; }
+    #clickBtn:active { background: #2a4a7a; }
+    #hoverBtn { background: #1e3a1e; color: #cec; border-color: #2a6a2a;
+                transition: background 0.2s, border-color 0.2s; }
+    #hoverBtn.hovering  { background: #2a5a2a; border-color: #4a9a4a; }
+    #hoverBtn.triggered { background: #00aa00; border-color: #00ff00; color: #000; font-weight: bold; }
+    #touchBtn { background: #3a1e3a; color: #ece; border-color: #6a2a6a;
+                touch-action: none; user-select: none; }
+    #scrollBox { height: 160px; overflow-y: scroll; background: #1a1a1a;
+                 border-radius: 4px; border: 1px solid #333; }
+    #scrollContent { height: 500px; display: flex; flex-direction: column;
+                     justify-content: space-between; align-items: center;
+                     padding: 14px; color: #444; font-size: 12px; }
+    #dragCanvas { display: block; background: #111; border-radius: 4px; cursor: crosshair; width: 100%; }
+  </style>
+</head>
+<body>
+
+<div class="topbar">
+  <div id="uaInfo">-</div>
+  <div id="sysInfo">-</div>
+  <div id="globalCoords">x: -  y: -</div>
+</div>
+
+<div class="section">
+  <div class="section-title">Click &amp; Drag - Draw here</div>
+  <canvas id="dragCanvas" width="1" height="180"></canvas>
+  <div class="result" id="dragResult">waiting for drag...</div>
+  <div class="help">
+    <span class="label">selector:</span> id=dragCanvas &nbsp;|&nbsp;
+    <span class="label">coords:</span> <span id="dragCoords">-</span><br>
+    Dotted grey = hover trail &nbsp;·&nbsp; Solid orange = drag trail &nbsp;·&nbsp;
+    Use <code>mouseDown</code> / <code>mouseUp</code> + <code>mouseClick none</code> in scripts.
+  </div>
+</div>
+
+<div class="layout">
+
+  <div class="section">
+    <div class="section-title">Click / Hover / Touch</div>
+    <div class="btn-row">
+      <button id="clickBtn" class="btn" onmousedown="handleClick(event)">Click</button>
+      <button id="hoverBtn" class="btn">Hover &nbsp;<span id="hoverTimer">0.0s</span></button>
+      <button id="touchBtn" class="btn"
+              ontouchstart="handleTouchStart(event)"
+              ontouchend="handleTouchEnd(event)">Touch</button>
+    </div>
+    <div class="result" id="clickResult">click: waiting...</div>
+    <div class="result" id="hoverResult">hover: waiting...</div>
+    <div class="result" id="touchResult">touch: waiting...</div>
+    <div class="help">
+      <span class="label">click:</span> id=clickBtn &nbsp;<span id="clickCoords">-</span>
+        &nbsp;·&nbsp; left=green right=red middle=blue<br>
+      <span class="label">hover:</span> id=hoverBtn &nbsp;<span id="hoverCoords">-</span>
+        &nbsp;·&nbsp; highlights 1s, triggers 2s<br>
+      <span class="label">touch:</span> id=touchBtn &nbsp;<span id="touchCoords">-</span>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Scroll Test</div>
+    <div id="scrollBox" onscroll="handleScroll(event)">
+      <div id="scrollContent">
+        <div>^ top</div>
+        <div>. . .</div>
+        <div>. . .</div>
+        <div>. . .</div>
+        <div>. . .</div>
+        <div>v bottom</div>
+      </div>
+    </div>
+    <div class="result" id="scrollPos">scrollTop: 0px</div>
+    <div class="help">
+      <span class="label">selector:</span> id=scrollBox<br>
+      <span class="label">coords:</span> <span id="scrollCoords">-</span><br>
+      scroll events not yet in agent scripts
+    </div>
+  </div>
+
+</div>
+
+<script>
+var PING = 'https://webperfbench.github.io/blank.html';
+
+function ping(action) {
+  fetch(PING + '?action=' + action);
+}
+
+// Viewport / UA info
+function updateViewport() {
+  document.getElementById('uaInfo').textContent = navigator.userAgent;
+  document.getElementById('sysInfo').textContent =
+    'screen: ' + screen.width + 'x' + screen.height + '  |  ' +
+    'browser: ' + window.outerWidth + 'x' + window.outerHeight + '  |  ' +
+    'viewport: ' + window.innerWidth + 'x' + window.innerHeight + '  |  ' +
+    'dpr: ' + window.devicePixelRatio;
+}
+window.addEventListener('resize', updateViewport);
+updateViewport();
+
+// Global mouse tracker
+document.addEventListener('mousemove', function(e) {
+  document.getElementById('globalCoords').textContent = 'x: ' + e.clientX + '  y: ' + e.clientY;
+});
+
+// Drag canvas
+var dc   = document.getElementById('dragCanvas');
+var dctx = dc.getContext('2d');
+var dragging  = false;
+var dragLast  = null;
+var dragPoints = [];
+
+function resizeDragCanvas() {
+  var w = dc.offsetWidth;
+  var img = dctx.getImageData(0, 0, dc.width, dc.height);
+  dc.width = w;
+  dctx.putImageData(img, 0, 0);
+  document.getElementById('dragCoords').textContent =
+    Math.round(dc.getBoundingClientRect().left + dc.offsetWidth / 2) + ',' +
+    Math.round(dc.getBoundingClientRect().top  + dc.offsetHeight / 2);
+}
+window.addEventListener('resize', resizeDragCanvas);
+resizeDragCanvas();
+
+function dcPos(e) {
+  var r = dc.getBoundingClientRect();
+  var s = dc.width / r.width;
+  return { x: (e.clientX - r.left) * s, y: (e.clientY - r.top) * s };
+}
+
+function dcStartDrag(e) {
+  dragging = true;
+  dragLast = dcPos(e);
+  dragPoints = [{ x: Math.round(e.clientX), y: Math.round(e.clientY) }];
+  document.getElementById('dragResult').textContent = 'drag started at ' + Math.round(e.clientX) + ',' + Math.round(e.clientY);
+  document.getElementById('dragResult').style.color = '#ffaa00';
+  ping('dragStart');
+}
+
+function dcMove(e) {
+  var p = dcPos(e);
+  if (dragLast) {
+    dctx.beginPath();
+    dctx.moveTo(dragLast.x, dragLast.y);
+    dctx.lineTo(p.x, p.y);
+    if (dragging) {
+      dctx.strokeStyle = 'orange'; dctx.lineWidth = 2; dctx.setLineDash([]);
+    } else {
+      dctx.strokeStyle = '#555'; dctx.lineWidth = 1; dctx.setLineDash([4, 6]);
+    }
+    dctx.stroke();
+    dctx.setLineDash([]);
+  }
+  dragLast = p;
+  if (dragging) dragPoints.push({ x: Math.round(e.clientX), y: Math.round(e.clientY) });
+}
+
+function dcEndDrag(e) {
+  if (!dragging) return;
+  dragging = false;
+  document.getElementById('dragResult').textContent =
+    'drag ended at ' + Math.round(e.clientX) + ',' + Math.round(e.clientY) +
+    ' (' + dragPoints.length + ' points)';
+  document.getElementById('dragResult').style.color = '#00cc00';
+  ping('dragEnd');
+}
+
+dc.addEventListener('mousedown',  dcStartDrag);
+dc.addEventListener('mousemove',  dcMove);
+dc.addEventListener('mouseup',    dcEndDrag);
+dc.addEventListener('mouseleave', function(e) { dcEndDrag(e); dragLast = null; clearTimeout(dcHoverTimer); });
+dc.addEventListener('mouseenter', function() { dcHoverTimer = setTimeout(function() { ping('canvasHover'); }, 1000); });
+var dcHoverTimer = null;
+
+// Click
+function handleClick(e) {
+  e.preventDefault();
+  var names   = ['left', 'middle', 'right'];
+  var actions = ['leftClick', 'middleClick', 'rightClick'];
+  var colors  = ['#00cc00', '#0088ff', '#cc2200'];
+  var el = document.getElementById('clickResult');
+  el.textContent    = 'click: ' + names[e.button] + ' at ' + e.clientX + ',' + e.clientY;
+  el.style.color       = colors[e.button];
+  el.style.borderColor = colors[e.button];
+  ping(actions[e.button]);
+}
+
+// Hover
+var hoverInterval = null;
+var hoverStart    = null;
+var hoverBtn      = document.getElementById('hoverBtn');
+
+hoverBtn.addEventListener('mouseenter', function() {
+  hoverStart = Date.now();
+  hoverBtn.classList.add('hovering');
+  document.getElementById('hoverResult').textContent    = 'hover: hovering...';
+  document.getElementById('hoverResult').style.color       = '#aaa';
+  document.getElementById('hoverResult').style.borderColor = '#2a2a2a';
+  hoverInterval = setInterval(function() {
+    var s = (Date.now() - hoverStart) / 1000;
+    document.getElementById('hoverTimer').textContent = s.toFixed(1) + 's';
+    if (s >= 2 && !hoverBtn.classList.contains('triggered')) {
+      hoverBtn.classList.add('triggered');
+      document.getElementById('hoverResult').textContent    = 'hover: triggered after ' + s.toFixed(1) + 's';
+      document.getElementById('hoverResult').style.color       = '#00ff00';
+      document.getElementById('hoverResult').style.borderColor = '#00aa00';
+      ping('hoverTriggered');
+    }
+  }, 100);
+});
+
+hoverBtn.addEventListener('mouseleave', function() {
+  clearInterval(hoverInterval);
+  var elapsed = hoverStart ? ((Date.now() - hoverStart) / 1000).toFixed(1) : '0.0';
+  var wasTriggered = hoverBtn.classList.contains('triggered');
+  hoverBtn.classList.remove('hovering', 'triggered');
+  document.getElementById('hoverTimer').textContent        = '0.0s';
+  document.getElementById('hoverResult').textContent       = (wasTriggered ? 'hover: triggered + ' : 'hover: ') + 'left after ' + elapsed + 's';
+  document.getElementById('hoverResult').style.color       = wasTriggered ? '#00cc00' : '#666';
+  document.getElementById('hoverResult').style.borderColor = wasTriggered ? '#00aa00' : '#2a2a2a';
+});
+
+// Scroll
+function handleScroll(e) {
+  var b   = e.target;
+  var max = b.scrollHeight - b.clientHeight;
+  var pct = max > 0 ? Math.round(b.scrollTop / max * 100) : 0;
+  var el  = document.getElementById('scrollPos');
+  el.textContent = 'scrollTop: ' + b.scrollTop + 'px  /  max: ' + max + 'px  (' + pct + '%)';
+  if (pct >= 99) {
+    el.textContent += '  -- BOTTOM';
+    el.style.color       = '#00ff00';
+    el.style.borderColor = '#00aa00';
+    ping('scrollBottom');
+  } else if (pct <= 1) {
+    el.textContent += '  -- TOP';
+    el.style.color       = '#aaa';
+    el.style.borderColor = '#2a2a2a';
+    ping('scrollTop');
+  } else {
+    el.style.color       = '#ffaa00';
+    el.style.borderColor = '#aa6600';
+  }
+}
+
+// Touch
+function handleTouchStart(e) {
+  e.preventDefault();
+  var t  = e.touches[0];
+  var el = document.getElementById('touchResult');
+  el.textContent = 'touch: start at ' + Math.round(t.clientX) + ',' + Math.round(t.clientY);
+  el.style.color = '#ffaa00';
+  ping('touch');
+}
+function handleTouchEnd(e) {
+  var el = document.getElementById('touchResult');
+  el.textContent += ' -> end';
+  el.style.color = '#ffdd00';
+}
+
+// Live element coords
+function updateCoords() {
+  function centre(id, labelId) {
+    var r = document.getElementById(id).getBoundingClientRect();
+    document.getElementById(labelId).textContent =
+      Math.round(r.left + r.width / 2) + ',' + Math.round(r.top + r.height / 2);
+  }
+  centre('clickBtn',  'clickCoords');
+  centre('hoverBtn',  'hoverCoords');
+  centre('scrollBox', 'scrollCoords');
+  centre('touchBtn',  'touchCoords');
+  resizeDragCanvas();
+}
+window.addEventListener('resize', updateCoords);
+updateCoords();
+</script>
+</body>
+</html>

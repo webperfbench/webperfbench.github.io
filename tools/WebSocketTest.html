@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WPR WebSocket Test</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    margin: 0;
+    padding: 16px;
+    background: #f4f5f7;
+    color: #222;
+  }
+  h1 { margin: 0 0 12px; font-size: 20px; }
+  h3 { margin: 16px 0 6px; font-size: 14px; text-transform: uppercase; color: #555; letter-spacing: 0.05em; }
+  #status {
+    font-size: 32px;
+    font-weight: 700;
+    padding: 18px 24px;
+    border-radius: 8px;
+    color: #fff;
+    text-align: center;
+    margin-bottom: 16px;
+    letter-spacing: 0.02em;
+  }
+  .state-idle          { background: #6c757d; }
+  .state-connecting    { background: #f39c12; }
+  .state-open          { background: #27ae60; }
+  .state-closed-clean  { background: #2980b9; }
+  .state-closed-dirty  { background: #c0392b; }
+  .state-error         { background: #c0392b; }
+  .panel {
+    background: #fff;
+    padding: 12px 16px;
+    border-radius: 6px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+    margin-bottom: 12px;
+  }
+  #config label { display: inline-block; margin-right: 12px; font-size: 13px; }
+  #config input, #config select { padding: 4px 6px; font-size: 13px; font-family: inherit; }
+  #config input[type=text] { width: 320px; }
+  #config button {
+    padding: 6px 16px;
+    margin-right: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    border: 0;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  #start { background: #27ae60; color: #fff; }
+  #stop  { background: #c0392b; color: #fff; }
+  #clear { background: #ddd; color: #333; }
+  #stats {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 8px;
+  }
+  .stat {
+    background: #fff;
+    padding: 10px 12px;
+    border-radius: 6px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+    text-align: center;
+  }
+  .stat .label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
+  .stat .value { font-size: 24px; font-weight: 700; margin-top: 2px; }
+  #last { display: flex; gap: 16px; }
+  #last > div { flex: 1; }
+  #log {
+    background: #1e1e1e;
+    color: #ddd;
+    font-family: Consolas, Menlo, monospace;
+    font-size: 12px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    max-height: 360px;
+    overflow-y: auto;
+    white-space: pre;
+  }
+  .log-info    { color: #ddd; }
+  .log-success { color: #4caf50; }
+  .log-warn    { color: #ff9800; }
+  .log-error   { color: #f44336; }
+</style>
+</head>
+<body>
+
+<h1>WPR WebSocket Test</h1>
+
+<div id="status" class="state-idle">IDLE</div>
+
+<div class="panel" id="config">
+  <label>URL: <input id="url" type="text"></label>
+  <label>Mode:
+    <select id="mode">
+      <option value="once">once (1 attempt, no retry)</option>
+      <option value="nopause">nopause (retry on any close, no delay) &mdash; KILLER</option>
+      <option value="wasclean">wasclean (retry only if !wasClean)</option>
+      <option value="backoff">backoff (exponential, capped at 30s)</option>
+    </select>
+  </label>
+  <label>Max attempts: <input id="max" type="number" min="1" max="10000" value="50" style="width:60px"></label>
+  <button id="start">Start</button>
+  <button id="stop">Stop</button>
+  <button id="clear">Clear log</button>
+</div>
+
+<div id="stats">
+  <div class="stat"><div class="label">Attempts</div><div class="value" id="attempts">0</div></div>
+  <div class="stat"><div class="label">Opens</div>   <div class="value" id="opens">0</div></div>
+  <div class="stat"><div class="label">Closes</div>  <div class="value" id="closes">0</div></div>
+  <div class="stat"><div class="label">Errors</div>  <div class="value" id="errors">0</div></div>
+  <div class="stat"><div class="label">Elapsed</div> <div class="value" id="elapsed">0.0s</div></div>
+  <div class="stat"><div class="label">Rate</div>    <div class="value" id="rate">0/s</div></div>
+</div>
+
+<h3>Last close</h3>
+<div class="panel" id="last">
+  <div><strong>Code:</strong> <span id="lastCode">&mdash;</span></div>
+  <div><strong>Reason:</strong> <span id="lastReason">&mdash;</span></div>
+  <div><strong>wasClean:</strong> <span id="lastClean">&mdash;</span></div>
+</div>
+
+<h3>Event log (newest first)</h3>
+<div id="log"></div>
+
+<script>
+(function () {
+  var DEFAULT_URL = 'wss://ws.postman-echo.com/raw';
+
+  var params = new URLSearchParams(location.search);
+  var config = {
+    url: params.get('url') || DEFAULT_URL,
+    mode: params.get('mode') || 'once',
+    max: parseInt(params.get('max_attempts'), 10) || 50,
+    autostart: params.has('mode') || params.has('url')
+  };
+
+  var ws = null;
+  var attempts = 0, opens = 0, closes = 0, errors = 0;
+  var startTime = null;
+  var stopped = true;
+  var nextBackoffMs = 100;
+  var statsTimer = null;
+
+  function $(id) { return document.getElementById(id); }
+
+  function setStatus(state, text) {
+    var el = $('status');
+    el.className = 'state-' + state;
+    el.textContent = text;
+  }
+
+  function pad(n, w) { return ('000' + n).slice(-w); }
+
+  function ts() {
+    var d = new Date();
+    return pad(d.getHours(), 2) + ':' + pad(d.getMinutes(), 2) + ':' +
+           pad(d.getSeconds(), 2) + '.' + pad(d.getMilliseconds(), 3);
+  }
+
+  function log(msg, kind) {
+    var el = $('log');
+    var line = document.createElement('div');
+    line.className = 'log-' + (kind || 'info');
+    line.textContent = '[' + ts() + '] ' + msg;
+    el.insertBefore(line, el.firstChild);
+    // Cap log to avoid OOM during storm tests.
+    while (el.childNodes.length > 500) {
+      el.removeChild(el.lastChild);
+    }
+  }
+
+  function updateStats() {
+    $('attempts').textContent = attempts;
+    $('opens').textContent = opens;
+    $('closes').textContent = closes;
+    $('errors').textContent = errors;
+    if (startTime) {
+      var elapsed = (Date.now() - startTime) / 1000;
+      $('elapsed').textContent = elapsed.toFixed(1) + 's';
+      $('rate').textContent = (elapsed > 0 ? (attempts / elapsed).toFixed(1) : '0') + '/s';
+    } else {
+      $('elapsed').textContent = '0.0s';
+      $('rate').textContent = '0/s';
+    }
+  }
+
+  function connect() {
+    if (stopped) return;
+    if (attempts >= config.max) {
+      setStatus('idle', 'STOPPED (max ' + config.max + ' attempts)');
+      log('Reached max attempts (' + config.max + '). Stopping.', 'warn');
+      stopped = true;
+      return;
+    }
+    attempts++;
+    if (!startTime) startTime = Date.now();
+    setStatus('connecting', 'CONNECTING #' + attempts);
+    log('Attempt #' + attempts + ': new WebSocket(' + config.url + ')', 'info');
+    updateStats();
+
+    try {
+      ws = new WebSocket(config.url);
+    } catch (e) {
+      errors++;
+      log('Constructor threw: ' + e.message, 'error');
+      updateStats();
+      handleClose(false, -1, e.message);
+      return;
+    }
+
+    ws.onopen = function () {
+      opens++;
+      setStatus('open', 'OPEN #' + attempts);
+      log('onopen (readyState=' + ws.readyState + ')', 'success');
+      updateStats();
+    };
+
+    ws.onclose = function (ev) {
+      closes++;
+      $('lastCode').textContent = ev.code;
+      $('lastReason').textContent = ev.reason || '(empty)';
+      $('lastClean').textContent = String(ev.wasClean);
+      var stateClass = ev.wasClean ? 'closed-clean' : 'closed-dirty';
+      setStatus(stateClass, 'CLOSED ' + ev.code + ' (wasClean=' + ev.wasClean + ')');
+      log('onclose code=' + ev.code + ' wasClean=' + ev.wasClean +
+          ' reason="' + (ev.reason || '') + '"',
+          ev.wasClean ? 'info' : 'warn');
+      updateStats();
+      handleClose(ev.wasClean, ev.code, ev.reason);
+    };
+
+    ws.onerror = function () {
+      errors++;
+      log('onerror', 'error');
+      updateStats();
+    };
+
+    ws.onmessage = function (ev) {
+      log('onmessage: ' + String(ev.data).slice(0, 200), 'info');
+    };
+  }
+
+  function handleClose(wasClean, code, reason) {
+    if (stopped) return;
+    switch (config.mode) {
+      case 'once':
+        stopped = true;
+        setStatus(wasClean ? 'closed-clean' : 'closed-dirty', 'DONE (one-shot)');
+        log('mode=once: stopping after first close.', 'info');
+        break;
+      case 'nopause':
+        log('mode=nopause: reconnecting immediately, NO BACKOFF.', 'warn');
+        connect();
+        break;
+      case 'wasclean':
+        if (!wasClean) {
+          log('mode=wasclean: !wasClean, reconnecting immediately.', 'warn');
+          connect();
+        } else {
+          stopped = true;
+          setStatus('closed-clean', 'DONE (clean close, mode=wasclean)');
+          log('mode=wasclean: clean close received, not reconnecting.', 'success');
+        }
+        break;
+      case 'backoff':
+        var delay = nextBackoffMs;
+        nextBackoffMs = Math.min(nextBackoffMs * 2, 30000);
+        log('mode=backoff: reconnecting in ' + delay + 'ms.', 'info');
+        setTimeout(connect, delay);
+        break;
+      default:
+        stopped = true;
+        log('Unknown mode "' + config.mode + '". Stopping.', 'error');
+    }
+  }
+
+  function start() {
+    if (!stopped) return;
+    stopped = false;
+    attempts = opens = closes = errors = 0;
+    startTime = null;
+    nextBackoffMs = 100;
+    config.url = $('url').value;
+    config.mode = $('mode').value;
+    config.max = parseInt($('max').value, 10) || 50;
+    $('lastCode').textContent = '—';
+    $('lastReason').textContent = '—';
+    $('lastClean').textContent = '—';
+    log('=== START: mode=' + config.mode + ', url=' + config.url +
+        ', max=' + config.max + ' ===', 'success');
+    if (statsTimer) clearInterval(statsTimer);
+    statsTimer = setInterval(updateStats, 250);
+    connect();
+  }
+
+  function stop() {
+    stopped = true;
+    if (ws) {
+      try { ws.close(1000, 'user stop'); } catch (e) {}
+    }
+    if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+    setStatus('idle', 'STOPPED (by user)');
+    log('=== STOPPED by user ===', 'warn');
+    updateStats();
+  }
+
+  function clearLog() {
+    $('log').innerHTML = '';
+  }
+
+  // Wire UI.
+  $('url').value = config.url;
+  $('mode').value = config.mode;
+  $('max').value = config.max;
+  $('start').addEventListener('click', start);
+  $('stop').addEventListener('click', stop);
+  $('clear').addEventListener('click', clearLog);
+
+  log('Ready. Defaults: url=' + DEFAULT_URL + ', mode=once, max=50.', 'info');
+  log('Query params: ?url=<wss-url>&mode=<once|nopause|wasclean|backoff>&max_attempts=<n>', 'info');
+
+  if (config.autostart) {
+    log('Autostart triggered by query params.', 'info');
+    start();
+  }
+})();
+</script>
+
+</body>
+</html>

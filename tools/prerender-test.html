@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Prerender Source</title>
+</head>
+<body>
+<h1>Source page</h1>
+<p>This page defines a speculation rule that prerenders <code>prerender-child.html</code>.</p>
+<p>Open devtools -&gt; Application -&gt; Preloading to observe.</p>
+
+<script type="speculationrules">
+{
+  "prerender": [{
+    "source": "list",
+    "urls": ["prerender-child.html"]
+  }]
+}
+</script>
+
+<p><a href="prerender-child.html">Click to activate the prerender -&gt;</a></p>
+</body>
+</html>
