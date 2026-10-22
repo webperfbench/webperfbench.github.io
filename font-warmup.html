@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en" data-font-warmup="loading">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Local Font Warm-up</title>
+  <style>
+    body { margin: 2rem auto; padding: 0 1rem; max-width: 76rem; font-family: system-ui, sans-serif; }
+    #status { padding: 1rem; border: 2px solid #666; }
+    [data-font-warmup="ready"] #status { border-color: #176b2c; }
+    [data-font-warmup="error"] #status, .error { color: #9e1b1b; }
+    section { margin: 2rem 0; }
+    canvas { display: block; max-width: 100%; height: auto; border: 1px solid #ccc; }
+    code { overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <h1>Local Font Warm-up</h1>
+  <p>Automatically loads and renders installed Calibri regular, bold and italic, and Times New Roman regular.
+    No font files are downloaded or included in this page.</p>
+  <p id="status" role="status" aria-live="polite">Loading and rendering local fonts...</p>
+  <noscript><p class="error">Warm-up cannot run without JavaScript.</p></noscript>
+  <p>Automation: wait for <code>window.fontWarmup.status === "ready"</code>.
+    A status of <code>"error"</code> means warm-up failed; do not treat it as success.</p>
+  <p>Ready means the sample text was rendered, not a guarantee that every font-file page is cached.
+    Run this page before, not inside, a measured workload.</p>
+  <div id="previews"></div>
+  <script>
+    "use strict";
+
+    const fonts = [
+      { label: "Calibri regular", family: "WarmupCalibriRegular",
+        source: 'local("Calibri"), local("Calibri Regular")', weight: "400", style: "normal" },
+      { label: "Calibri bold", family: "WarmupCalibriBold",
+        source: 'local("Calibri Bold"), local("Calibri-Bold")', weight: "700", style: "normal" },
+      { label: "Calibri italic", family: "WarmupCalibriItalic",
+        source: 'local("Calibri Italic"), local("Calibri-Italic")', weight: "400", style: "italic" },
+      { label: "Times New Roman regular", family: "WarmupTimesRegular",
+        source: 'local("Times New Roman"), local("TimesNewRomanPSMT")', weight: "400", style: "normal" }
+    ];
+    const samples = [
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz",
+      "0123456789 !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
+      "office affinity efficient fi fl ffi ffl",
+      "\u00c0\u00c1\u00c4\u00c5\u00c6\u00c7\u00c9\u00d1\u00d6\u00d8\u00dc " +
+        "\u00e0\u00e1\u00e4\u00e5\u00e6\u00e7\u00e9\u00f1\u00f6\u00f8\u00fc " +
+        "\u00a3\u00a5\u20ac\u2018\u2019\u201c\u201d\u2013\u2014\u2026"
+    ];
+    const statusElement = document.getElementById("status");
+    const previews = document.getElementById("previews");
+    const startedAt = performance.now();
+    const result = window.fontWarmup = {
+      status: "loading",
+      durationMs: null,
+      fonts: fonts.map(font => ({ name: font.label, status: "loading", durationMs: null, error: null })),
+      error: null
+    };
+
+    function finish(status, message) {
+      result.durationMs = Math.round((performance.now() - startedAt) * 10) / 10;
+      result.error = status === "error" ? message : null;
+      result.status = status;
+      document.documentElement.dataset.fontWarmup = status;
+      statusElement.textContent = message;
+    }
+
+    async function renderFont(font, index) {
+      const record = result.fonts[index];
+      const section = document.createElement("section");
+      const heading = document.createElement("h2");
+      const detail = document.createElement("p");
+      const canvas = document.createElement("canvas");
+      heading.textContent = font.label;
+      detail.textContent = "Loading...";
+      canvas.setAttribute("aria-label", font.label + " text samples");
+      section.append(heading, detail, canvas);
+      previews.append(section);
+      const fontStartedAt = performance.now();
+      let timer;
+      let stage = "Local font loading";
+      try {
+        const face = new FontFace(font.family, font.source, { weight: font.weight, style: font.style });
+        await Promise.race([
+          face.load(),
+          new Promise((resolve, reject) => {
+            timer = setTimeout(() => reject(new Error("Font load timed out")), 5000);
+          })
+        ]);
+        clearTimeout(timer);
+        document.fonts.add(face);
+        stage = "Text rendering";
+        canvas.width = 1280;
+        canvas.height = 460;
+        const context = canvas.getContext("2d");
+        if (!context) throw new Error("Canvas 2D unavailable");
+        context.fillStyle = "#111";
+        let y = 12;
+        for (const size of [16, 24, 36]) {
+          context.font = `${font.style} ${font.weight} ${size}px "${font.family}"`;
+          for (const sample of samples) {
+            y += size + 6;
+            context.measureText(sample);
+            context.fillText(sample, 12, y);
+          }
+        }
+        // Readback forces deferred canvas drawing to complete before reporting success.
+        const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        if (!pixels.some((value, offset) => offset % 4 === 3 && value !== 0)) {
+          throw new Error("No rendered text");
+        }
+        record.durationMs = Math.round((performance.now() - fontStartedAt) * 10) / 10;
+        record.status = "ready";
+        detail.textContent = "Loaded and rendered in " + record.durationMs + " ms.";
+      } catch {
+        record.status = "error";
+        record.error = stage + " failed, was blocked, or timed out.";
+        detail.textContent = record.error;
+        detail.className = "error";
+        console.error(font.label + ": " + record.error);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    async function warmUp() {
+      if (typeof FontFace !== "function" || !document.fonts) {
+        for (const font of result.fonts) {
+          font.status = "error";
+          font.error = "Font loading API unavailable.";
+        }
+        finish("error", "Warm-up failed: this browser does not provide the font loading API.");
+        return;
+      }
+      await Promise.all(fonts.map(renderFont));
+      if (result.fonts.some(font => font.status !== "ready")) {
+        finish("error", "Warm-up failed: one or more local fonts could not be loaded or rendered. See details below.");
+        return;
+      }
+      await document.fonts.ready;
+      document.body.getBoundingClientRect();
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      finish("ready", "Ready: all four local font faces loaded and rendered in " +
+        (Math.round((performance.now() - startedAt) * 10) / 10) + " ms.");
+    }
+
+    warmUp().catch(() => {
+      console.error("Font warm-up could not complete.");
+      finish("error", "Warm-up failed unexpectedly. Do not treat this result as ready.");
+    });
+  </script>
+</body>
+</html>
